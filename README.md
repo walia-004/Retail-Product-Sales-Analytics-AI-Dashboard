@@ -241,7 +241,7 @@ ollama  # install from https://ollama.com
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/your-username/retail-sales-analytics.git
+git clone https://github.com/walia-004/retail-sales-analytics.git
 cd retail-sales-analytics
 
 # 2. Install dependencies
