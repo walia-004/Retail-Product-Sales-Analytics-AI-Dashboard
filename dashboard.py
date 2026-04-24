@@ -286,98 +286,207 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 # ── Ollama config ─────────────────────────────────────────────
 OLLAMA_URL   = "http://localhost:11434/api/chat"
-OLLAMA_MODEL = "gemma:2b"
+OLLAMA_MODEL = "Qwen2.5"  # Change to your model name if different
 
 @st.cache_data
 def build_dataset_context(_df):
-    total_rev    = _df["Revenue"].sum()
-    total_profit = _df["Profit"].sum()
-    total_orders = len(_df)
-    avg_margin   = _df["Profit_Margin"].mean()
-    total_qty    = _df["Quantity"].sum()
-    cat_tbl = _df.groupby("Category").agg(
-        Revenue=("Revenue","sum"), Profit=("Profit","sum"),
-        Orders=("Order_ID","count"), Avg_Margin=("Profit_Margin","mean"),
+    import pandas as pd
+
+    df = _df.copy()
+
+    # --- SAFETY CLEANING ---
+    df.columns = df.columns.str.strip()
+    for col in ["Revenue", "Profit", "Quantity", "Profit_Margin"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # --- BASIC KPIs ---
+    total_rev    = df["Revenue"].sum()
+    total_profit = df["Profit"].sum()
+    total_orders = df["Order_ID"].nunique()
+    total_qty    = df["Quantity"].sum()
+    avg_margin   = df["Profit_Margin"].mean()
+    avg_order_val = total_rev / total_orders if total_orders else 0
+
+    # --- DATE RANGE ---
+    df["Order_Date"] = pd.to_datetime(df["Order_Date"], errors="coerce")
+    date_min = df["Order_Date"].min()
+    date_max = df["Order_Date"].max()
+    date_rng = (
+        f"{date_min.strftime('%b %Y')} – {date_max.strftime('%b %Y')}"
+        if pd.notna(date_min) else "N/A"
+    )
+
+    # --- CATEGORY BREAKDOWN (WITH SHARE %) ---
+    cat_tbl = df.groupby("Category").agg(
+        Revenue=("Revenue","sum"),
+        Profit=("Profit","sum"),
+        Orders=("Order_ID","count"),
+        Avg_Margin=("Profit_Margin","mean")
     ).sort_values("Revenue", ascending=False)
+
+    cat_tbl["Revenue_Share"] = (cat_tbl["Revenue"] / total_rev) * 100
+
     cat_lines = "\n".join(
-        f"  - {cat}: Revenue=${row.Revenue:,.0f}, Profit=${row.Profit:,.0f}, "
-        f"Orders={row.Orders:,}, AvgMargin={row.Avg_Margin:.1f}%"
+        f"  - {cat}: Revenue=${row.Revenue:,.0f} ({row.Revenue_Share:.1f}%), "
+        f"Profit=${row.Profit:,.0f}, Orders={row.Orders:,}, "
+        f"AvgMargin={row.Avg_Margin:.1f}%"
         for cat, row in cat_tbl.iterrows()
     )
-    reg_tbl = _df.groupby("Region").agg(
-        Revenue=("Revenue","sum"), Profit=("Profit","sum"),
-        Orders=("Order_ID","count"), Avg_Margin=("Profit_Margin","mean"),
+
+    # --- SUB-CATEGORY (TOP 10) ---
+    subcat_tbl = df.groupby("Sub_Category")["Revenue"].sum().sort_values(ascending=False).head(10)
+    subcat_lines = "\n".join(
+        f"  - {name}: ${val:,.0f}" for name, val in subcat_tbl.items()
+    )
+
+    # --- REGION BREAKDOWN ---
+    reg_tbl = df.groupby("Region").agg(
+        Revenue=("Revenue","sum"),
+        Profit=("Profit","sum"),
+        Orders=("Order_ID","count"),
+        Avg_Margin=("Profit_Margin","mean")
     ).sort_values("Revenue", ascending=False)
+
+    reg_tbl["Revenue_Share"] = (reg_tbl["Revenue"] / total_rev) * 100
+
     reg_lines = "\n".join(
-        f"  - {reg}: Revenue=${row.Revenue:,.0f}, Profit=${row.Profit:,.0f}, "
-        f"Orders={row.Orders:,}, AvgMargin={row.Avg_Margin:.1f}%"
+        f"  - {reg}: Revenue=${row.Revenue:,.0f} ({row.Revenue_Share:.1f}%), "
+        f"Profit=${row.Profit:,.0f}, Orders={row.Orders:,}, "
+        f"AvgMargin={row.Avg_Margin:.1f}%"
         for reg, row in reg_tbl.iterrows()
     )
-    top10 = _df.groupby("Product_Name")["Revenue"].sum().sort_values(ascending=False).head(10)
-    top10_lines = "\n".join(f"  {i+1}. {name}: ${rev:,.0f}" for i,(name,rev) in enumerate(top10.items()))
-    corr_rp = _df["Revenue"].corr(_df["Profit"])
-    date_min = _df["Order_Date"].min()
-    date_max = _df["Order_Date"].max()
-    date_rng = (f"{date_min.strftime('%b %Y')} – {date_max.strftime('%b %Y')}"
-                if pd.notna(date_min) else "N/A")
-    monthly = _df.groupby(["Year","Month"])["Revenue"].sum().reset_index()
+
+    # --- TOP & BOTTOM PRODUCTS ---
+    prod_rev = df.groupby("Product_Name")["Revenue"].sum().sort_values(ascending=False)
+
+    top10 = prod_rev.head(10)
+    bottom5 = prod_rev.tail(5)
+
+    top10_lines = "\n".join(
+        f"  {i+1}. {name}: ${rev:,.0f}" for i, (name, rev) in enumerate(top10.items())
+    )
+
+    bottom5_lines = "\n".join(
+        f"  - {name}: ${rev:,.0f}" for name, rev in bottom5.items()
+    )
+
+    # --- MONTHLY TREND (IMPORTANT FOR LLM) ---
+    df["Year"] = df["Order_Date"].dt.year
+    df["Month"] = df["Order_Date"].dt.month
+
+    monthly = df.groupby(["Year","Month"]).agg(
+        Revenue=("Revenue","sum"),
+        Profit=("Profit","sum")
+    ).reset_index().sort_values(["Year","Month"])
+
+    monthly_lines = "\n".join(
+        f"  - {int(row.Year)}-M{int(row.Month)}: Revenue=${row.Revenue:,.0f}, Profit=${row.Profit:,.0f}"
+        for _, row in monthly.iterrows()
+    )
+
+    # --- BEST / WORST MONTH ---
     if not monthly.empty:
         best  = monthly.loc[monthly["Revenue"].idxmax()]
         worst = monthly.loc[monthly["Revenue"].idxmin()]
-        temporal = (f"Best month: {int(best.Year)}-M{int(best.Month)} (${best.Revenue:,.0f})  "
-                    f"Worst: {int(worst.Year)}-M{int(worst.Month)} (${worst.Revenue:,.0f})")
+
+        temporal = (
+            f"Best month: {int(best.Year)}-M{int(best.Month)} (${best.Revenue:,.0f}) | "
+            f"Worst: {int(worst.Year)}-M{int(worst.Month)} (${worst.Revenue:,.0f})"
+        )
     else:
         temporal = "No temporal data."
-    return f"""=== PRODUCT SALES DATASET CONTEXT ===
-Date Range  : {date_rng}  |  Total Orders: {total_orders:,}
-Total Revenue: ${total_rev:,.0f}  |  Total Profit: ${total_profit:,.0f}
-Avg Margin  : {avg_margin:.2f}%  |  Units Sold: {total_qty:,}
---- CATEGORY BREAKDOWN ---
+
+    # --- CORRELATION ---
+    corr_rp = df["Revenue"].corr(df["Profit"])
+
+    # --- FINAL CONTEXT ---
+    return f"""
+=== PRODUCT SALES DATASET CONTEXT ===
+
+[OVERVIEW]
+Date Range: {date_rng}
+Total Orders: {total_orders:,}
+Total Revenue: ${total_rev:,.0f}
+Total Profit: ${total_profit:,.0f}
+Units Sold: {total_qty:,}
+Avg Margin: {avg_margin:.2f}%
+Avg Order Value: ${avg_order_val:,.2f}
+
+[CATEGORY PERFORMANCE]
 {cat_lines}
---- REGIONAL BREAKDOWN ---
+
+[SUB-CATEGORY TOP 10]
+{subcat_lines}
+
+[REGIONAL PERFORMANCE]
 {reg_lines}
---- TOP 10 PRODUCTS BY REVENUE ---
+
+[TOP 10 PRODUCTS]
 {top10_lines}
---- STATS ---
-Revenue–Profit r: {corr_rp:.3f}
-Revenue Mean: ${_df["Revenue"].mean():,.2f}  Median: ${_df["Revenue"].median():,.2f}
-Profit  Mean: ${_df["Profit"].mean():,.2f}   Median: ${_df["Profit"].median():,.2f}
+
+[LOWEST 5 PRODUCTS]
+{bottom5_lines}
+
+[MONTHLY TREND]
+{monthly_lines}
+
+[KEY STATS]
+Revenue–Profit Correlation: {corr_rp:.3f}
+Revenue Mean: ${df["Revenue"].mean():,.2f} | Median: ${df["Revenue"].median():,.2f}
+Profit Mean: ${df["Profit"].mean():,.2f} | Median: ${df["Profit"].median():,.2f}
+
+[TEMPORAL HIGHLIGHTS]
 {temporal}
-======================================""".strip()
+
+======================================
+""".strip()
 
 dataset_context = build_dataset_context(df)
 
-SYSTEM_PROMPT = f"""You are an expert data analyst assistant for a US retail product sales dashboard.
-You have access to the following live dataset summary based on the user's current filters:
+SYSTEM_PROMPT = f"""
+You are a precision-first data analyst for a US retail product sales dashboard.
 
+You must answer using ONLY the data provided in the dataset context below.
+Do not use outside knowledge.
+Do not guess missing values.
+Do not infer trends that are not directly supported by the numbers in the context.
+
+Dataset context:
 {dataset_context}
 
 Rules:
-- Answer accurately using only the numbers above.
-- Be concise, factual, and use bullet points where helpful.
-- Format currency as USD with commas (e.g. $1,234,567).
-- Never invent data not in the context.
+- Use only values explicitly present in the context.
+- If a metric is not in the context, say it is unavailable.
+- If the context does not support a conclusion, say so clearly.
+- Be concise, factual, and dashboard-ready.
+- Prefer bullet points for insights.
+- Use USD format with commas, for example: $1,234,567.
+- Keep percentages rounded to 1 decimal place unless exact precision is required.
+- Do not invent rankings, averages, totals, or comparisons.
+- If asked for a chart, return only valid Python code.
+- For charts, use only labels and values that exist in the context.
+- For month-based charts, preserve chronological order.
+- For category, region, state, or product charts, use the exact breakdown values from the context.
+- If there are multiple possible interpretations, state the assumption explicitly and keep it minimal.
 
-CHART GENERATION RULES (very important):
-If the user asks you to "show", "draw", "chart", "plot", "visualise", or "graph" something,
-you MUST include a JSON block at the END of your reply in this exact format:
+Insight rules:
+- Base insights on totals, comparisons, shares, and changes that are directly supported by the context.
+- Do not overstate causation. Use wording like “highest”, “lowest”, “largest share”, or “shows” instead of “caused by”.
+- When summarizing performance, mention revenue, profit, quantity, and margin only if those values are available in the context.
+- If the context includes filtered data, always interpret results as “within the current filters”.
 
-<chart_json>
-{{
-  "type": "bar" | "line" | "pie" | "scatter" | "histogram",
-  "title": "Chart title here",
-  "x_label": "X axis label",
-  "y_label": "Y axis label",
-  "labels": ["label1", "label2", ...],
-  "values": [100, 200, ...]
-}}
-</chart_json>
+Output style:
+- Start with the main insight first.
+- Then add supporting facts.
+- Keep the response short and accurate.
 
-Use only data that exists in the dataset context above.
-For time-series or month charts, labels = month names, values = revenue/profit numbers from context.
-For category/region charts, use the exact figures from the breakdown above.
-Only emit ONE <chart_json> block per reply."""
-
+For charts:
+- Return Python code only.
+- Use matplotlib.
+- Build the plot from the exact labels and values in the context.
+- Do not fabricate missing categories or time periods.
+"""
 def check_ollama_running():
     try:
         r = requests.get("http://localhost:11434/api/tags", timeout=3)
@@ -1621,6 +1730,6 @@ st.markdown("""
 <div style='text-align:center; color:#5A7FA0; padding:12px 0; font-size:13px;'>
     Product Sales Dataset &nbsp;|&nbsp;
     Built with Python · Pandas · Seaborn · Plotly · Streamlit &nbsp;|&nbsp;
-    🤖 AI powered by Ollama Gemma 2B (local)
+    🤖 AI powered by Ollama Qwen2.5 (local)
 </div>
 """, unsafe_allow_html=True)
