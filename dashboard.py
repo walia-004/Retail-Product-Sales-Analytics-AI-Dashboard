@@ -286,7 +286,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 # ── Ollama config ─────────────────────────────────────────────
 OLLAMA_URL   = "http://localhost:11434/api/chat"
-OLLAMA_MODEL = "Qwen2.5"  # Change to your model name if different
+OLLAMA_MODEL = "Qwen2.5:3b"  # Change to your model name if different
 
 @st.cache_data
 def build_dataset_context(_df):
@@ -489,14 +489,14 @@ For charts:
 """
 def check_ollama_running():
     try:
-        r = requests.get("http://localhost:11434/api/tags", timeout=3)
+        r = requests.get("http://localhost:11434/api/tags", timeout=300)
         return r.status_code == 200
     except Exception:
         return False
 
 def list_ollama_models():
     try:
-        r = requests.get("http://localhost:11434/api/tags", timeout=3)
+        r = requests.get("http://localhost:11434/api/tags", timeout=300)
         if r.status_code == 200:
             return [m["name"] for m in r.json().get("models", [])]
     except Exception:
@@ -506,9 +506,9 @@ def list_ollama_models():
 def chat_with_ollama(messages, model=OLLAMA_MODEL):
     payload = {
         "model": model, "messages": messages, "stream": True,
-        "options": {"temperature": 0.3, "top_p": 0.9, "num_ctx": 4096},
+        "options": {"temperature": 0.3, "top_p": 0.9, "num_ctx": 4096, "num_predict": 512},
     }
-    with requests.post(OLLAMA_URL, json=payload, stream=True, timeout=120) as resp:
+    with requests.post(OLLAMA_URL, json=payload, stream=True, timeout=600) as resp:
         resp.raise_for_status()
         for line in resp.iter_lines():
             if line:
@@ -1730,6 +1730,6 @@ st.markdown("""
 <div style='text-align:center; color:#5A7FA0; padding:12px 0; font-size:13px;'>
     Product Sales Dataset &nbsp;|&nbsp;
     Built with Python · Pandas · Seaborn · Plotly · Streamlit &nbsp;|&nbsp;
-    🤖 AI powered by Ollama Qwen2.5 (local)
+    🤖 AI powered by Ollama Qwen2.5:3b (local)
 </div>
 """, unsafe_allow_html=True)
