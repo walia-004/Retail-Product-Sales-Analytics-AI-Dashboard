@@ -209,7 +209,7 @@ The **Streamlit dashboard** provides a fully interactive BI experience:
 
 ## 🤖 AI Chat Assistant
 
-An embedded **local AI assistant** powered by [Ollama](https://ollama.com/) (Qwen2.5 model) — **no API keys, no cost, fully private**.
+An embedded **local AI assistant** powered by [Ollama](https://ollama.com/) (Qwen2.5:3b model) — **no API keys, no cost, fully private**.
 
 ### Capabilities
 
@@ -248,7 +248,7 @@ cd retail-sales-analytics
 pip install -r requirements.txt.txt
 
 # 3. Pull the Ollama model
-ollama pull Qwen2.5
+ollama pull Qwen2.5:3b
 
 # 4. Launch the dashboard
 streamlit run dashboard.py
