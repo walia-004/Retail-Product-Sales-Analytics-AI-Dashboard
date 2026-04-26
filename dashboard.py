@@ -291,15 +291,15 @@ OLLAMA_MODEL = "Qwen2.5:3b"  # Change to your model name if different
 @st.cache_data
 def build_dataset_context(_df):
     import pandas as pd
-
+ 
     df = _df.copy()
-
+ 
     # --- SAFETY CLEANING ---
     df.columns = df.columns.str.strip()
     for col in ["Revenue", "Profit", "Quantity", "Profit_Margin"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
-
+ 
     # --- BASIC KPIs ---
     total_rev    = df["Revenue"].sum()
     total_profit = df["Profit"].sum()
@@ -307,7 +307,7 @@ def build_dataset_context(_df):
     total_qty    = df["Quantity"].sum()
     avg_margin   = df["Profit_Margin"].mean()
     avg_order_val = total_rev / total_orders if total_orders else 0
-
+ 
     # --- DATE RANGE ---
     df["Order_Date"] = pd.to_datetime(df["Order_Date"], errors="coerce")
     date_min = df["Order_Date"].min()
@@ -316,7 +316,7 @@ def build_dataset_context(_df):
         f"{date_min.strftime('%b %Y')} – {date_max.strftime('%b %Y')}"
         if pd.notna(date_min) else "N/A"
     )
-
+ 
     # --- CATEGORY BREAKDOWN (WITH SHARE %) ---
     cat_tbl = df.groupby("Category").agg(
         Revenue=("Revenue","sum"),
@@ -324,22 +324,22 @@ def build_dataset_context(_df):
         Orders=("Order_ID","count"),
         Avg_Margin=("Profit_Margin","mean")
     ).sort_values("Revenue", ascending=False)
-
+ 
     cat_tbl["Revenue_Share"] = (cat_tbl["Revenue"] / total_rev) * 100
-
+ 
     cat_lines = "\n".join(
         f"  - {cat}: Revenue=${row.Revenue:,.0f} ({row.Revenue_Share:.1f}%), "
         f"Profit=${row.Profit:,.0f}, Orders={row.Orders:,}, "
         f"AvgMargin={row.Avg_Margin:.1f}%"
         for cat, row in cat_tbl.iterrows()
     )
-
+ 
     # --- SUB-CATEGORY (TOP 10) ---
     subcat_tbl = df.groupby("Sub_Category")["Revenue"].sum().sort_values(ascending=False).head(10)
     subcat_lines = "\n".join(
         f"  - {name}: ${val:,.0f}" for name, val in subcat_tbl.items()
     )
-
+ 
     # --- REGION BREAKDOWN ---
     reg_tbl = df.groupby("Region").agg(
         Revenue=("Revenue","sum"),
@@ -347,63 +347,161 @@ def build_dataset_context(_df):
         Orders=("Order_ID","count"),
         Avg_Margin=("Profit_Margin","mean")
     ).sort_values("Revenue", ascending=False)
-
+ 
     reg_tbl["Revenue_Share"] = (reg_tbl["Revenue"] / total_rev) * 100
-
+ 
     reg_lines = "\n".join(
         f"  - {reg}: Revenue=${row.Revenue:,.0f} ({row.Revenue_Share:.1f}%), "
         f"Profit=${row.Profit:,.0f}, Orders={row.Orders:,}, "
         f"AvgMargin={row.Avg_Margin:.1f}%"
         for reg, row in reg_tbl.iterrows()
     )
-
+ 
     # --- TOP & BOTTOM PRODUCTS ---
     prod_rev = df.groupby("Product_Name")["Revenue"].sum().sort_values(ascending=False)
-
+ 
     top10 = prod_rev.head(10)
     bottom5 = prod_rev.tail(5)
-
+ 
     top10_lines = "\n".join(
         f"  {i+1}. {name}: ${rev:,.0f}" for i, (name, rev) in enumerate(top10.items())
     )
-
+ 
     bottom5_lines = "\n".join(
         f"  - {name}: ${rev:,.0f}" for name, rev in bottom5.items()
     )
-
+ 
     # --- MONTHLY TREND (IMPORTANT FOR LLM) ---
     df["Year"] = df["Order_Date"].dt.year
     df["Month"] = df["Order_Date"].dt.month
-
+ 
     monthly = df.groupby(["Year","Month"]).agg(
         Revenue=("Revenue","sum"),
         Profit=("Profit","sum")
     ).reset_index().sort_values(["Year","Month"])
-
+ 
     monthly_lines = "\n".join(
         f"  - {int(row.Year)}-M{int(row.Month)}: Revenue=${row.Revenue:,.0f}, Profit=${row.Profit:,.0f}"
         for _, row in monthly.iterrows()
     )
-
+ 
     # --- BEST / WORST MONTH ---
     if not monthly.empty:
         best  = monthly.loc[monthly["Revenue"].idxmax()]
         worst = monthly.loc[monthly["Revenue"].idxmin()]
-
+ 
         temporal = (
             f"Best month: {int(best.Year)}-M{int(best.Month)} (${best.Revenue:,.0f}) | "
             f"Worst: {int(worst.Year)}-M{int(worst.Month)} (${worst.Revenue:,.0f})"
         )
     else:
         temporal = "No temporal data."
-
+ 
     # --- CORRELATION ---
     corr_rp = df["Revenue"].corr(df["Profit"])
+ 
+    # --- PRE-COMPUTED HIGHLIGHTS (prevent model from guessing rankings) ---
+    top_region      = reg_tbl.index[0]
+    top_region_rev  = reg_tbl["Revenue"].iloc[0]
+    top_region_pct  = reg_tbl["Revenue_Share"].iloc[0]
+    low_region      = reg_tbl.index[-1]
+    low_region_rev  = reg_tbl["Revenue"].iloc[-1]
+ 
+    top_cat         = cat_tbl.index[0]
+    top_cat_rev     = cat_tbl["Revenue"].iloc[0]
+    top_cat_pct     = cat_tbl["Revenue_Share"].iloc[0]
+    low_cat         = cat_tbl.index[-1]
+    low_cat_rev     = cat_tbl["Revenue"].iloc[-1]
+ 
+    top_margin_reg  = reg_tbl["Avg_Margin"].idxmax()
+    top_margin_val  = reg_tbl["Avg_Margin"].max()
+    top_profit_reg  = reg_tbl["Profit"].idxmax()
+    top_profit_val  = reg_tbl["Profit"].iloc[reg_tbl["Profit"].argmax()]
+    
+    
+    # ── ADDITIONAL INSIGHTS ─────────────────────────────────────
 
+    # --- SUB-CATEGORY FULL ANALYSIS ---
+    subcat_full = df.groupby("Sub_Category").agg(
+        Revenue=("Revenue","sum"),
+        Profit=("Profit","sum"),
+        Orders=("Order_ID","count"),
+        Avg_Margin=("Profit_Margin","mean")
+    ).sort_values("Revenue", ascending=False)
+
+    top_subcat = subcat_full.index[0]
+    top_subcat_rev = subcat_full["Revenue"].iloc[0]
+
+    low_subcat = subcat_full.index[-1]
+    low_subcat_rev = subcat_full["Revenue"].iloc[-1]
+
+    # --- PRODUCT PROFIT ANALYSIS ---
+    prod_profit = df.groupby("Product_Name")["Profit"].sum().sort_values(ascending=False)
+
+    top_profit_product = prod_profit.index[0]
+    top_profit_value = prod_profit.iloc[0]
+
+    low_profit_product = prod_profit.index[-1]
+    low_profit_value = prod_profit.iloc[-1]
+
+    # --- REGION QUANTITY LEADER ---
+    region_qty = df.groupby("Region")["Quantity"].sum().sort_values(ascending=False)
+    top_qty_region = region_qty.index[0]
+    top_qty_value = region_qty.iloc[0]
+
+    # --- CATEGORY MARGIN LEADER ---
+    cat_margin = df.groupby("Category")["Profit_Margin"].mean().sort_values(ascending=False)
+    top_margin_cat = cat_margin.index[0]
+    top_margin_cat_val = cat_margin.iloc[0]
+
+    # --- YEARLY PERFORMANCE ---
+    yearly = df.groupby("Year").agg(
+        Revenue=("Revenue","sum"),
+        Profit=("Profit","sum")
+    ).sort_index()
+
+    year_lines = "\n".join(
+        f"  - {int(idx)}: Revenue=${row.Revenue:,.0f}, Profit=${row.Profit:,.0f}"
+        for idx, row in yearly.iterrows()
+    )
+
+    # --- MONTH-OVER-MONTH GROWTH ---
+    monthly["Prev_Revenue"] = monthly["Revenue"].shift(1)
+    monthly["MoM_Growth"] = ((monthly["Revenue"] - monthly["Prev_Revenue"]) / monthly["Prev_Revenue"]) * 100
+
+    growth_lines = "\n".join(
+        f"  - {int(row.Year)}-M{int(row.Month)}: {row.MoM_Growth:.1f}%"
+        for _, row in monthly.dropna().iterrows()
+    )
+
+    # --- REGION + CATEGORY COMBO ---
+    combo = df.groupby(["Region","Category"])["Revenue"].sum().sort_values(ascending=False)
+
+    top_combo = combo.index[0]
+    top_combo_val = combo.iloc[0]
+
+    low_combo = combo.index[-1]
+    low_combo_val = combo.iloc[-1]
+
+    # --- HIGH VALUE PRODUCTS ---
+    high_value = df[df["Revenue"] > df["Revenue"].quantile(0.95)]
+    high_value_count = len(high_value)
+
+    # --- OUTLIERS ---
+    rev_mean = df["Revenue"].mean()
+    rev_std  = df["Revenue"].std()
+    outliers = df[df["Revenue"] > (rev_mean + 2 * rev_std)]
+    outlier_count = len(outliers)
+
+    # --- PROFIT EFFICIENCY ---
+    df["Profit_per_Order"] = df["Profit"]
+    efficiency = df.groupby("Region")["Profit_per_Order"].mean().sort_values(ascending=False)
+    best_eff_region = efficiency.index[0]
+    best_eff_val = efficiency.iloc[0]
     # --- FINAL CONTEXT ---
     return f"""
 === PRODUCT SALES DATASET CONTEXT ===
-
+ 
 [OVERVIEW]
 Date Range: {date_rng}
 Total Orders: {total_orders:,}
@@ -412,49 +510,82 @@ Total Profit: ${total_profit:,.0f}
 Units Sold: {total_qty:,}
 Avg Margin: {avg_margin:.2f}%
 Avg Order Value: ${avg_order_val:,.2f}
-
-[CATEGORY PERFORMANCE]
+ 
+[QUICK ANSWERS — USE THESE FIRST, DO NOT GUESS]
+Highest Revenue Region : {top_region} (${top_region_rev:,.0f}, {top_region_pct:.1f}% share)
+Lowest  Revenue Region : {low_region} (${low_region_rev:,.0f})
+Highest Profit  Region : {top_profit_reg} (${top_profit_val:,.0f})
+Highest Margin  Region : {top_margin_reg} ({top_margin_val:.1f}%)
+Highest Revenue Category : {top_cat} (${top_cat_rev:,.0f}, {top_cat_pct:.1f}% share)
+Lowest  Revenue Category : {low_cat} (${low_cat_rev:,.0f})
+Best Month  : {temporal}
+ 
+[CATEGORY PERFORMANCE] (sorted by Revenue descending)
 {cat_lines}
-
+ 
 [SUB-CATEGORY TOP 10]
 {subcat_lines}
-
-[REGIONAL PERFORMANCE]
+ 
+[REGIONAL PERFORMANCE] (sorted by Revenue descending)
 {reg_lines}
-
+ 
 [TOP 10 PRODUCTS]
 {top10_lines}
-
+ 
 [LOWEST 5 PRODUCTS]
 {bottom5_lines}
-
+ 
 [MONTHLY TREND]
 {monthly_lines}
-
+ 
 [KEY STATS]
 Revenue–Profit Correlation: {corr_rp:.3f}
 Revenue Mean: ${df["Revenue"].mean():,.2f} | Median: ${df["Revenue"].median():,.2f}
 Profit Mean: ${df["Profit"].mean():,.2f} | Median: ${df["Profit"].median():,.2f}
-
+ 
 [TEMPORAL HIGHLIGHTS]
 {temporal}
-
+ 
 ======================================
+[ADVANCED QUICK INSIGHTS]
+Top Sub-Category: {top_subcat} (${top_subcat_rev:,.0f})
+Lowest Sub-Category: {low_subcat} (${low_subcat_rev:,.0f})
+
+Top Profit Product: {top_profit_product} (${top_profit_value:,.0f})
+Lowest Profit Product: {low_profit_product} (${low_profit_value:,.0f})
+
+Highest Quantity Region: {top_qty_region} ({top_qty_value:,} units)
+Best Margin Category: {top_margin_cat} ({top_margin_cat_val:.1f}%)
+
+Best Region-Category Combo: {top_combo} (${top_combo_val:,.0f})
+Worst Region-Category Combo: {low_combo} (${low_combo_val:,.0f})
+
+Most Efficient Region (Profit per Order): {best_eff_region} (${best_eff_val:,.2f})
+
+High Value Orders (Top 5%): {high_value_count}
+Revenue Outliers (>2σ): {outlier_count}
+
+[YEARLY PERFORMANCE]
+{year_lines}
+
+[MONTH-OVER-MONTH GROWTH %]
+{growth_lines}
 """.strip()
-
+ 
 dataset_context = build_dataset_context(df)
-
+ 
 SYSTEM_PROMPT = f"""
 You are a precision-first data analyst for a US retail product sales dashboard.
-
 You must answer using ONLY the data provided in the dataset context below.
 Do not use outside knowledge.
 Do not guess missing values.
 Do not infer trends that are not directly supported by the numbers in the context.
 
-Dataset context:
+════════════════════════════════════════
+DATASET CONTEXT  —  YOUR ONLY SOURCE OF TRUTH
+════════════════════════════════════════
 {dataset_context}
-
+════════════════════════════════════════
 Rules:
 - Use only values explicitly present in the context.
 - If a metric is not in the context, say it is unavailable.
@@ -476,16 +607,37 @@ Insight rules:
 - When summarizing performance, mention revenue, profit, quantity, and margin only if those values are available in the context.
 - If the context includes filtered data, always interpret results as “within the current filters”.
 
+CRITICAL — ANTI-HALLUCINATION RULES:
+1. Every single number you write MUST be copied EXACTLY from the DATASET CONTEXT above.
+2. NEVER use your training memory for revenue, profit, orders, margin, or quantity figures.
+3. Before writing any number, locate it in the context. If absent, say "not available in context".
+4. Sections in the context are sorted by Revenue descending — the FIRST item is ALWAYS the highest.
+5. Do NOT reorder, recalculate, or rephrase numbers. Copy them verbatim.
+6. When asked "which region/category has highest X", read the FIRST entry in the relevant section.
+ 
+ANSWERING RULES:
+- Answer using ONLY values from the DATASET CONTEXT.
+- Start with the direct answer, then add bullet supporting facts.
+- Use USD format: $1,234,567. Round percentages to 1 decimal place.
+- If a metric is missing, say: "Not available in the current dataset." 
+
 Output style:
 - Start with the main insight first.
 - Then add supporting facts.
 - Keep the response short and accurate.
 
-For charts:
+
+- Give a Python code answer to make a chart :
 - Return Python code only.
 - Use matplotlib.
 - Build the plot from the exact labels and values in the context.
 - Do not fabricate missing categories or time periods.
+CHART RULES — when the user asks for a chart, graph, plot, or visualization:
+- Supported chart types: bar, line, pie, scatter
+- labels and values MUST come directly from the DATASET CONTEXT. Never invent them.
+- For pie/share charts use Revenue_Share percentages (0–100) as values.
+- For monthly trends preserve the chronological order from the context.
+- For region/category/product charts copy labels and values exactly as they appear in the context.
 """
 def check_ollama_running():
     try:
